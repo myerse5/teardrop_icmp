@@ -14,6 +14,9 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
     Original source: https://pastebin.com/62JmMddE
+
+    Modified by Evan Myers.
+
 */
 
 // Send an IPv4 ICMP packet via raw socket.
@@ -22,7 +25,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <unistd.h>           // close()
+#include <unistd.h>           // close(), getopt()
 #include <string.h>           // strcpy, memset(), and memcpy()
 
 #include <netdb.h>            // struct addrinfo
@@ -47,7 +50,7 @@ unsigned short int checksum (unsigned short int *, int);
 
 int main (int argc, char **argv)
 {
-  int status, datalen, sd, *ip_flags;
+  int status, datalen, sd, *ip_flags, opt;
   const int on = 1;
   char *interface, *target, *src_ip, *dst_ip;
   struct ip iphdr;
@@ -58,8 +61,11 @@ int main (int argc, char **argv)
   struct ifreq ifr;
   void *tmp;
 
-  // Allocate memory for various arrays.
 
+  // Valid command line options string, see GETOPT(3).
+  char optstring[] = "i:s:d:";
+
+  // Allocate memory for various arrays.
   // Maximum ICMP payload size = 65535 - IPv4 header (20 bytes) - ICMP header (8 bytes)
   tmp = (unsigned char *) malloc ((IP_MAXPACKET - IP4_HDRLEN - ICMP_HDRLEN) * sizeof (unsigned char));
   if (tmp != NULL) {
@@ -124,8 +130,25 @@ int main (int argc, char **argv)
   }
   memset (ip_flags, 0, 4 * sizeof (int));
 
-  // Interface to send packet through.
-  strcpy (interface, argv[1]);
+
+  // Collect interface and IP values from command line options.
+  while ((opt = getopt (argc, argv, optstring)) != -1) {
+    switch (opt) {
+      case 'i':
+        interface = optarg;
+        break;
+      case 's':
+        strcpy (src_ip, optarg);
+        break;
+      case 'd':
+        strcpy (target, optarg);
+        break;
+      default:
+        fprintf (stderr, "Invalid argument \"%d\"", opt);
+        exit (EXIT_FAILURE);
+    }
+  }
+
 
   // Submit request for a socket descriptor to lookup interface.
   if ((sd = socket (AF_INET, SOCK_RAW, IPPROTO_ICMP)) < 0) {
@@ -142,12 +165,6 @@ int main (int argc, char **argv)
   }
   close (sd);
   printf ("Index for interface %s is %i\n", interface, ifr.ifr_ifindex);
-
-  // Source IPv4 address: you need to fill this out
-  strcpy (src_ip, "192.168.211.141");
-
-  // Destination URL or IPv4 address
-  strcpy (target, "192.168.211.141");
 
   // Fill out hints for getaddrinfo().
   memset (&hints, 0, sizeof (struct addrinfo));
@@ -173,7 +190,6 @@ int main (int argc, char **argv)
   data[3] = 't';
 
   // IPv4 header
-
   // IPv4 header length (4 bits): Number of 32-bit words in header = 5
   iphdr.ip_hl = IP4_HDRLEN / 4;
 
@@ -190,7 +206,6 @@ int main (int argc, char **argv)
   iphdr.ip_id = htons (0);
 
   // Flags, and Fragmentation offset (3, 13 bits): 0 since single datagram
-
   // Zero (1 bit)
   ip_flags[0] = 0;
 
@@ -209,7 +224,7 @@ int main (int argc, char **argv)
                       +  ip_flags[3]);
 
   // Time-to-Live (8 bits): default to maximum value
-  iphdr.ip_ttl = 255;
+  iphdr.ip_ttl = 16;
 
   // Transport layer protocol (8 bits): 1 for ICMP
   iphdr.ip_p = IPPROTO_ICMP;
@@ -278,33 +293,29 @@ int main (int argc, char **argv)
     exit (EXIT_FAILURE);
   }
 
-  bind(sd,(struct sockaddr*)&sin,sizeof(sin));
+  bind (sd, (struct sockaddr*)&sin, sizeof(sin));
   // Send packet.
   if (sendto (sd, packet, ICMP_HDRLEN + datalen, 0, (struct sockaddr *) &sin, sizeof (struct sockaddr)) < 0)  {
     perror ("sendto() failed ");
     exit (EXIT_FAILURE);
   }
 
-  /*******/
   struct sockaddr_in rec;
-
   unsigned char * pkt = (unsigned char *) malloc (2048);
 
-  if (recvfrom (sd, (void*)pkt, sizeof(struct ip) + sizeof(struct icmp)+datalen , 0, NULL, (socklen_t*)sizeof (struct sockaddr)) < 0)  {
+  if (recvfrom (sd, (void*)pkt, sizeof(struct ip) + sizeof(struct icmp) + datalen, 0, NULL, (socklen_t*)sizeof (struct sockaddr)) < 0)  {
     perror ("recvfrom() failed ");
     exit (EXIT_FAILURE);
   }
+
   struct ip *ip = (struct ip *)pkt;
   struct icmp *icmp = (struct icmp *)(pkt + sizeof(struct ip));
-
-
 
   printf("%s %s %d\n",(char*)inet_ntoa(*(struct in_addr*)&ip->ip_dst),
                                           (char*)inet_ntoa(*(struct in_addr*)&ip->ip_src),
                                           icmp->icmp_type);
+
   free (pkt);
-  /******/
-  // Close socket descriptor.
   close (sd);
 
   // Free allocated memory.
