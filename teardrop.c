@@ -44,107 +44,41 @@
 // Define some constants.
 #define IP4_HDRLEN 20         // IPv4 header length
 #define ICMP_HDRLEN 8         // ICMP header length for echo request, excludes data
+#define MAX_DATALEN (IP_MAXPACKET - IP4_HDRLEN - ICMP_HDRLEN)
 
 // Function prototypes
 unsigned short int checksum (unsigned short int *, int);
 
 int main (int argc, char **argv)
 {
-  int status, datalen, sd, *ip_flags, opt;
-  const int on = 1;
-  char *interface, *target, *src_ip, *dst_ip;
+  int status, datalen, sd, ip_flags[4], opt;
+  char interface[40];
+  char src_ip[16], dst_ip[100], target[16];
   struct ip iphdr;
   struct icmp icmphdr;
-  unsigned char *data, *packet;
+  unsigned char data[MAX_DATALEN], packet[IP_MAXPACKET];
   struct addrinfo hints, *res;
   struct sockaddr_in *ipv4, sin;
   struct ifreq ifr;
-  void *tmp;
 
-
-  // Valid command line options string, see GETOPT(3).
+  // Handle command line options, see GETOPT(3).
   char optstring[] = "i:s:d:";
 
-  // Allocate memory for various arrays.
-  // Maximum ICMP payload size = 65535 - IPv4 header (20 bytes) - ICMP header (8 bytes)
-  tmp = (unsigned char *) malloc ((IP_MAXPACKET - IP4_HDRLEN - ICMP_HDRLEN) * sizeof (unsigned char));
-  if (tmp != NULL) {
-    data = tmp;
-  } else {
-    fprintf (stderr, "ERROR: Cannot allocate memory for array 'data'.\n");
-    exit (EXIT_FAILURE);
-  }
-  memset (data, 0, (IP_MAXPACKET - IP4_HDRLEN - ICMP_HDRLEN) * sizeof (unsigned char));
-
-  tmp = (unsigned char *) malloc (IP_MAXPACKET * sizeof (unsigned char));
-  if (tmp != NULL) {
-    packet = tmp;
-  } else {
-    fprintf (stderr, "ERROR: Cannot allocate memory for array 'packet'.\n");
-    exit (EXIT_FAILURE);
-  }
-  memset (packet, 0, IP_MAXPACKET * sizeof (unsigned char));
-
-  tmp = (char *) malloc (40 * sizeof (char));
-  if (tmp != NULL) {
-    interface = tmp;
-  } else {
-    fprintf (stderr, "ERROR: Cannot allocate memory for array 'interface'.\n");
-    exit (EXIT_FAILURE);
-  }
-  memset (interface, 0, 40 * sizeof (char));
-
-  tmp = (char *) malloc (40 * sizeof (char));
-  if (tmp != NULL) {
-    target = tmp;
-  } else {
-    fprintf (stderr, "ERROR: Cannot allocate memory for array 'target'.\n");
-    exit (EXIT_FAILURE);
-  }
-  memset (target, 0, 40 * sizeof (char));
-
-  tmp = (char *) malloc (16 * sizeof (char));
-  if (tmp != NULL) {
-    src_ip = tmp;
-  } else {
-    fprintf (stderr, "ERROR: Cannot allocate memory for array 'src_ip'.\n");
-    exit (EXIT_FAILURE);
-  }
-  memset (src_ip, 0, 16 * sizeof (char));
-
-  tmp = (char *) malloc (16 * sizeof (char));
-  if (tmp != NULL) {
-    dst_ip = tmp;
-  } else {
-    fprintf (stderr, "ERROR: Cannot allocate memory for array 'dst_ip'.\n");
-    exit (EXIT_FAILURE);
-  }
-  memset (dst_ip, 0, 16 * sizeof (char));
-
-  tmp = (int *) malloc (4 * sizeof (int));
-  if (tmp != NULL) {
-    ip_flags = tmp;
-  } else {
-    fprintf (stderr, "ERROR: Cannot allocate memory for array 'ip_flags'.\n");
-    exit (EXIT_FAILURE);
-  }
-  memset (ip_flags, 0, 4 * sizeof (int));
-
-
-  // Collect interface and IP values from command line options.
   while ((opt = getopt (argc, argv, optstring)) != -1) {
     switch (opt) {
       case 'i':
-        interface = optarg;
+        memset (&interface, 0, sizeof(interface));
+        strncpy (interface, optarg, sizeof(interface) - 1);
         break;
       case 's':
-        strcpy (src_ip, optarg);
+        memset (&src_ip, 0, sizeof(src_ip));
+        strncpy (src_ip, optarg, sizeof(src_ip) - 1);
         break;
       case 'd':
-        strcpy (target, optarg);
+        memset (&dst_ip, 0, sizeof(target));
+        strncpy (target, optarg, sizeof(target) - 1);
         break;
       default:
-        fprintf (stderr, "Invalid argument \"%d\"", opt);
         exit (EXIT_FAILURE);
     }
   }
@@ -178,8 +112,7 @@ int main (int argc, char **argv)
     exit (EXIT_FAILURE);
   }
   ipv4 = (struct sockaddr_in *) res->ai_addr;
-  tmp = &(ipv4->sin_addr);
-  inet_ntop (AF_INET, tmp, dst_ip, 40);
+  inet_ntop (AF_INET, &(ipv4->sin_addr), dst_ip, 40);
   freeaddrinfo (res);
 
   // ICMP data
@@ -224,7 +157,7 @@ int main (int argc, char **argv)
                       +  ip_flags[3]);
 
   // Time-to-Live (8 bits): default to maximum value
-  iphdr.ip_ttl = 16;
+  iphdr.ip_ttl = 255;
 
   // Transport layer protocol (8 bits): 1 for ICMP
   iphdr.ip_p = IPPROTO_ICMP;
@@ -240,7 +173,6 @@ int main (int argc, char **argv)
   iphdr.ip_sum = checksum ((unsigned short int *) &iphdr, IP4_HDRLEN);
 
   // ICMP header
-
   // Message Type (8 bits): echo request
   icmphdr.icmp_type = ICMP_ECHO;
 
@@ -255,21 +187,17 @@ int main (int argc, char **argv)
 
   // ICMP header checksum (16 bits): set to 0 when calculating checksum
   icmphdr.icmp_cksum = 0;
+  char tmp[ICMP_HDRLEN + datalen];
+  memcpy (tmp, &icmphdr, ICMP_HDRLEN);
+  memcpy (tmp + ICMP_HDRLEN, data, datalen);
+  icmphdr.icmp_cksum = checksum ((unsigned short int *) tmp, ICMP_HDRLEN + datalen);
+
 
   // Prepare packet.
-
-
-
-  // Next part of packet is upper layer protocol header.
-  memcpy ((packet ), &icmphdr, ICMP_HDRLEN);
-
-  // Finally, add the ICMP data.
-  memcpy (packet  + ICMP_HDRLEN, data, datalen);
-
-  // Calculate ICMP header checksum
-  icmphdr.icmp_cksum = checksum ((unsigned short int *) (packet ), ICMP_HDRLEN + datalen);
-  memcpy ((packet ), &icmphdr, ICMP_HDRLEN);
-
+  memset (&packet, 0, sizeof (packet));
+  memcpy (packet, &iphdr, IP4_HDRLEN);
+  memcpy (packet + IP4_HDRLEN, &icmphdr, ICMP_HDRLEN);
+  memcpy (packet  + IP4_HDRLEN + ICMP_HDRLEN, data, datalen);
 
   // The kernel is going to prepare layer 2 information (ethernet frame header)
   // for us. For that, we need to specify a destination for the kernel in order
@@ -287,7 +215,14 @@ int main (int argc, char **argv)
   }
 
 
-  // Bind socket to interface index
+  int on = 1, off = 0;
+  // Enable writing the IP header information.
+  if (setsockopt (sd, IPPROTO_IP, IP_HDRINCL, &on, sizeof(on)) < 0) {
+    perror ("setsockopt() failed to write IP header ");
+    exit (EXIT_FAILURE);
+  }
+
+  // Bind socket to interface index.
   if (setsockopt (sd, SOL_SOCKET, SO_BINDTODEVICE, &ifr, sizeof (ifr)) < 0) {
     perror ("setsockopt() failed to bind to interface ");
     exit (EXIT_FAILURE);
@@ -295,13 +230,16 @@ int main (int argc, char **argv)
 
   bind (sd, (struct sockaddr*)&sin, sizeof(sin));
   // Send packet.
-  if (sendto (sd, packet, ICMP_HDRLEN + datalen, 0, (struct sockaddr *) &sin, sizeof (struct sockaddr)) < 0)  {
+  if (sendto (sd, packet, IP4_HDRLEN + ICMP_HDRLEN + datalen, 0, (struct sockaddr *) &sin, sizeof (sin)) < 0)  {
     perror ("sendto() failed ");
     exit (EXIT_FAILURE);
+  } else {
+    printf ("Success?\n");
   }
 
   struct sockaddr_in rec;
-  unsigned char * pkt = (unsigned char *) malloc (2048);
+  unsigned char pkt[IP_MAXPACKET];
+  memset (&pkt, 0, sizeof(pkt));
 
   if (recvfrom (sd, (void*)pkt, sizeof(struct ip) + sizeof(struct icmp) + datalen, 0, NULL, (socklen_t*)sizeof (struct sockaddr)) < 0)  {
     perror ("recvfrom() failed ");
@@ -315,18 +253,7 @@ int main (int argc, char **argv)
                                           (char*)inet_ntoa(*(struct in_addr*)&ip->ip_src),
                                           icmp->icmp_type);
 
-  free (pkt);
   close (sd);
-
-  // Free allocated memory.
-  free (data);
-  free (packet);
-  free (interface);
-  free (target);
-  free (src_ip);
-  free (dst_ip);
-  free (ip_flags);
-
   return (EXIT_SUCCESS);
 }
 
